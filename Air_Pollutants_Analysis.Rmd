@@ -1,0 +1,321 @@
+---
+title: "Air_Pollutants_test and train"
+author: "Ayesha Anwar"
+date: "10/11/2021"
+output:
+  html_document: default
+  'html_document:': default
+install.packages("xfun")
+  
+---
+
+install packages and libraries
+
+```{r}
+install.packages("xfun")
+install.packages("writexl")
+install.packages("ggplot2")
+install.packages("dplyr")
+install.packages("broom")
+install.packages("ggpubr")
+install.packages("data.table")
+install.packages("psych")
+install.packages("zoo") 
+install.packages("rgl", depend=T)
+install.packages("imputeTS")
+install.packages("drc")
+install.packages("visreg")
+install.packages("performance")
+install.packages("see")
+install.packages('patchwork')
+install.packages('mgcv')
+
+
+library(writexl)
+library(ggplot2)
+library(dplyr)
+library(broom)
+library(ggpubr)
+library(car)
+library(data.table)
+library(reshape2)
+library(psych)
+library(RColorBrewer)
+library(zoo)
+library(rgl)
+library(lubridate)
+library(imputeTS)
+library(drc)
+library(splines)
+library(performance)
+library(caret) 
+library(mgcv)
+library(visreg)
+
+```
+
+Preprocess air pollutants and climatic variables data for the final datasheet to analyze the impact of climatic variables on air pollutants and prediction.
+
+First read the air pollutants data
+
+```{r}
+
+df1 = read.table("C:\\Users\\aanwar\\OneDrive - Fondazione Istituto Italiano Tecnologia\\R_Statistics\\Ayesha_Anwar_Project\\Air_Pollutants_Raw_Data.csv", dec = ".", sep = ",", header = TRUE)
+head(df1)
+tail(df1)
+glimpse(df1)
+
+```
+
+By looking at the air pollutants data. We have to preprocess the data for interpolating the missing values in the data and calculate daily average data as data is given hourly.In this file "value" shows the concentration of air pollutants of Karachi.
+
+```{r}
+
+#interpolate the missing values
+df1$value= replace(df1$value,df1$value==-999, NA)
+df1$value=as.numeric(df1$value)
+df1$value= na_interpolation(df1$value)
+
+
+#change the Date format
+df1$Date=as.Date(df1$Date, format=  "%d/%m/%Y")
+
+
+#mean the Air_Pollutants on daily basis
+df2 = as.data.frame(setNames(aggregate(value ~ Date, df1, mean), c("Date","Air_Pollutants")))
+
+```
+
+For the climatic variables load another file.
+
+```{r}
+
+df3 = read.table("C:\\Users\\aanwar\\OneDrive - Fondazione Istituto Italiano Tecnologia\\R_Statistics\\Ayesha_Anwar_Project\\Climate_Data.csv", dec = ".", sep = ",", header = TRUE)
+head(df3)
+tail(df3)
+glimpse(df3)
+
+```
+
+
+Merge the two files to make a final file to analyze the climatic variables and air pollutants.
+
+```{r}
+
+# change date format
+df3$Date=as.Date(df3$Date, format=  "%d/%m/%Y")
+
+
+#merge 2 files
+df4 = left_join(df3, df2, by=c("Date"))
+
+
+#interpolate the missing values for some days
+df4$Air_Pollutants= na_interpolation(df4$Air_Pollutants)
+glimpse(df4)
+
+```
+
+Visualize the air pollutants and climatic variables data on monthly basis
+
+```{r}
+
+#subset the data
+df5= subset(df4,select= c(Month,Date,Air_Pollutants, Temperature, Humidity, Wind_Speed, DewPoint))
+
+
+#visualize the data on monthly basis
+df6=setDT(df5)[,lapply(.SD, function(x) if(length(na.omit(x)) >=15)
+mean(x, na.rm=TRUE) else NA_real_) , 
+by = .(Month= format(as.IDate(Date), '%b'))]
+
+
+#save the data in excel
+#write_xlsx(df6,"E:\\PhD\\R Statistics\\Data\\Monthly_Average.xlsx")
+
+
+#plot the data
+
+correct_order <- c("Jan","Feb","Mar","Apr","May","Jun",
+                   "Jul","Aug","Sep","Oct","Nov","Dec")
+
+df6 = melt(df6, id.vars="Month")
+ggplot(df6, aes(Month,value, group = variable , col=variable)) + ggtitle("Monthly Average Value of Air Pollutants and Climatic Variables") + theme(plot.title=element_text(hjust=0.5)) + scale_x_discrete(limits=correct_order) + geom_point(size=2) + geom_line(size=1) + theme(text = element_text(size=18))
+
+```
+Monthly analysis of the mass concentration of air pollutants indicates the lowest concentration of air pollutants during the summer season in Karachi as compared to winter.Air pollutants have negative relationship with all climate factors. 
+
+
+Before performing any statistical analysis,normalized the data and Check the outliers in the data with the help of box plot and remove it.
+```{r}
+
+#subset data study
+df7= subset(df4,select= c(Air_Pollutants, Temperature, Humidity, Wind_Speed, DewPoint))
+
+
+#normalize the data
+df7 = as.data.frame(scale(df7[1:5]))
+
+#plot boxplot for all the dataset
+ggplot(stack(df7), aes(x= ind, y = values ,color = ind)) + 
+  labs(color ="Variable")+
+  xlab("Variable") +
+  ylab("Value") +
+  labs(title = "Box Plot of Air Pollutants and Climatic Variables")+
+  theme(plot.title=element_text(hjust=1))+
+  geom_boxplot() +
+  theme_classic() + theme(text = element_text(size=15))
+
+
+#define the outliers function 
+outliers = function(x) {
+  
+  Q1 = quantile(x, probs=.25)
+  Q3 = quantile(x, probs=.75)
+  iqr = Q3-Q1
+  
+  upper_limit = Q3 + (iqr*1.5)
+  lower_limit = Q1 - (iqr*1.5)
+  
+  x > upper_limit | x < lower_limit
+}
+
+remove_outliers <- function(df, cols = names(df)) {
+  for (col in cols) {
+    df = df[!outliers(df[[col]]),]
+  }
+  df
+}
+
+
+#remove the outlier
+df7=remove_outliers(df7, c('Air_Pollutants', 'Temperature', 'Wind_Speed', 'DewPoint', 'Humidity'))
+attach(df7)
+
+```
+
+
+After removing the outliers, perform visual inspection of variables to analyze the correlation of independent variables with dependent variable and with each other to filter out the independent variables.
+
+```{r}
+
+pairs.panels(df7, col="red", scale=TRUE)
+
+```
+
+All climatic variables have negative relationship with air pollutants. After analysis of above graphs and correlation values, multiple linear regression modeling is performed with only temperature, wind speed and dewpoint due to strong correlation with air pollutants.
+
+As humidity and dewpoint have strong positive correlation with each other, so humidity is excluded to avoid redundancy.
+
+
+split the data into training and testing data before modeling to predict the air pollutants with the help of climatic variables.
+
+```{r}
+
+set.seed(12345)
+
+training.samples = df7$Air_Pollutants %>%
+  createDataPartition(p = 0.8, list = FALSE)
+train.data  = df7[training.samples, ]
+test.data = df7[-training.samples, ]
+
+```
+
+
+Air pollutants has non linear relationship with climatic variables, so polynomial function is used in multiple linear regression modeling (MLRM).
+
+```{r}
+
+#multiple linear regression modeling for training data
+modelm1 = lm (Air_Pollutants ~ poly (Temperature,2) + DewPoint  + poly (Wind_Speed, 2), data = train.data)
+summary(modelm1)
+
+
+#multiple linear regression modeling for testing data
+predictionsm1 = modelm1 %>% predict(test.data) 
+m1coef=data.frame(
+  RMSE=RMSE(predictionsm1,test.data$Air_Pollutants),
+  R2= R2(predictionsm1,test.data$Air_Pollutants)
+)
+m1coef
+```
+
+Overall, the model is statistically significant, results suggest that climatic variables explain 60% of the variability in air pollutants concentration. Except for temperature values with the first degree of polynomial function, all climatic variables have statistically significant relationships. A multiple nonlinearlinear regression (MNLR) model is used to model the temperature variable more efficiently.
+
+Values for root mean square error and coefficient of determination for air pollution prediction using this model are 0.45 and 0.68, respectively, which are acceptable.
+
+
+Visualize the climatic variables, how the polynomial function fit the data.
+```{r}
+
+par(mfrow=c(2,2))
+visreg(modelm1, bty="n", ylab="Air_Quality")
+
+```
+
+
+Residuals analysis is performed for the acceptance of model.
+
+```{r}
+
+check_model(modelm1)
+
+```
+
+All independent variables have a variance inflation factor (VIF) of less than 5, indicating that there is no collinearity in the data. The residuals are distributed approximately normally in the QQ plot and histogram. However,there are some outliers for residuals.
+
+To find the best fit model for the prediction of air pollutants multiple non linear regression modeling GAM is also performed.
+
+```{r}
+
+#multiple non linear regression modeling for training data
+modelm2 = gam (Air_Pollutants ~  s(Temperature) + s(DewPoint) + s(Wind_Speed), method = "GCV.Cp", data = train.data)
+summary(modelm2)
+
+
+#multiple non linear regression modeling for testing data
+predictionsm2 = modelm2 %>% predict(test.data) 
+m2coef=data.frame(
+  RMSE=RMSE(predictionsm2,test.data$Air_Pollutants),
+  R2= R2(predictionsm2,test.data$Air_Pollutants)
+)
+
+```
+
+The MNLR model explains 63% of variability of the concentration of air pollutants is explained by climatic variables which is better than MLR model. All the climatic variables have statistically significant relationship. 
+
+The MNLR model predicts air contaminants better than the MLR model, with acceptable root mean square error (0.43) and coefficient of determination (0.71).
+
+
+Visualize the climatic variables, how the smoothing function best fit the data.
+
+```{r}
+
+par(mfrow=c(2,2))
+visreg(modelm2,ylab="Air_Quality")
+
+```
+
+
+Residuals analysis is performed for the acceptance of model. This analysis was performed on the cross-validation residuals to avoid the data overfitting problem.
+
+```{r}
+
+par(mfrow=c(2,2))
+gam.check(modelm2)
+
+```
+
+Histogram and QQ plot indicates the normality of the distribution of these residuals.Some outliers in residuals are observed near the standard deviation 2 but over all it is acceptable. Furthermore, the graph of these residuals in terms of estimated air pollutants shows a cloud of points that are uniformly dispersed and indicates that no structure remains in the residuals.
+
+Anova test is performed to compare the MLR and MNLR models.
+
+```{r}
+
+anova(modelm1, modelm2, test="Chisq")
+
+```
+
+
+In comparison to the MLR model, the Anova test reveals that the MNLR model is statistically significant for predicting the values of air pollutants by incorporating meteorological parameters
+
